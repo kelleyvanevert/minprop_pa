@@ -47,7 +47,7 @@ module type KERNEL =
       (formula list) * formula
 
     type theorem = private
-      Proof of sequent
+      Provable of sequent
 
     type goal =
       Goal of sequent
@@ -68,7 +68,7 @@ module Kernel : KERNEL = struct
     (formula list) * formula
 
   type theorem =
-    Proof of sequent
+    Provable of sequent
 
   type goal =
     Goal of sequent
@@ -76,19 +76,19 @@ module Kernel : KERNEL = struct
   exception RuleException of string
 
   let assume (a : formula) : theorem =
-    Proof ([a], a);;
+    Provable ([a], a);;
 
-  let intro_rule (a : formula) (Proof (gamma, b) : theorem) : theorem =
-    Proof (gamma -- a, Imp (a,b));;
+  let intro_rule (a : formula) (Provable (gamma, b) : theorem) : theorem =
+    Provable (gamma -- a, Imp (a,b));;
 
-  let elim_rule (Proof (gamma, imp) : theorem)
-                (Proof (delta, a) : theorem)
+  let elim_rule (Provable (gamma, imp) : theorem)
+                (Provable (delta, a) : theorem)
               : theorem =
     match imp with
       | Var _ -> raise (RuleException "cannot use [elim_rule] with (Var _) in first argument")
       | Imp (a', b) ->
         if imp = Imp(a, b) then
-          Proof (gamma @ delta, b)
+          Provable (gamma @ delta, b)
         else
           raise (RuleException "antecedent of first argument must be the second argument");;
 end;;
@@ -111,7 +111,7 @@ let rec print_formula : formula -> string = function
   | Var n -> Char.escaped (Char.chr (n + 65))
   | Imp (a,b) -> "(" ^ (print_formula a) ^ " => " ^ (print_formula b) ^ ")";;
 
-let print_theorem (Proof (l, a) : theorem) : string =
+let print_theorem (Provable (l, a) : theorem) : string =
     (String.concat ", " (List.map print_formula l)) ^ " |- " ^ (print_formula a);;
 
 let print_goal (Goal (l, a) : goal) : string =
@@ -147,7 +147,7 @@ exception JustificationException;;
 (* An easy way to check against the conclusion of a theorem *)
 let (|-) (th : theorem) (f : formula) =
   match th with
-  | Proof (_, f') when f = f' -> true
+  | Provable (_, f') when f = f' -> true
   | _ -> false;;
 
 let assumption (Goal (gamma, a) : goal) : goalstate =
