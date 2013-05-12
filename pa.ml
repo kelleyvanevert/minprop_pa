@@ -16,16 +16,16 @@ let split l n =
 
 
 (*
-  Core data types
-  ===============
-  
+  Kernel
+  ======
+
   Basically, we use sequents in two ways:
    either as a goal (something yet to be proven),
-   of as a theorem (a proved statement).
-  Ideally, the first one can be constructed
-   ad hoc, anytime, anywhere, while the second
-   is protected by a module (as is, e.g.,
-   HOL Light).
+   or as a theorem (a proved statement).
+  We protect the creation of theorems
+   by marking the type as private in the Kernel
+   module. Only the three inference rules can be
+   used to construct theorems.
    
   Tactics break a single goal into smaller
    pieces, conceptually going "up the
@@ -37,24 +37,64 @@ let split l n =
    may of course only use the three inference rules
    of minimal propositional logic.
 *)
-type formula =
-  | Var of int
-  | Imp of formula * formula;;
+module type KERNEL =
+  sig
+    type formula =
+      | Var of int
+      | Imp of formula * formula
 
-type sequent =
-  (formula list) * formula;;
+    type sequent =
+      (formula list) * formula
 
-(* This one ideally protected by a module.. *)
-type theorem =
-  Proof of sequent;;
+    type theorem = private
+      Proof of sequent
 
-(* ..while this one is for "free" *)
-type goal =
-  Proposition of sequent;;
+    type goal =
+      Goal of sequent
 
-type justification = (theorem list) -> theorem;;
-type goalstate = (goal list) * justification;;
-type tactic = goal -> goalstate;;
+    exception RuleException of string
+
+    val assume : formula -> theorem
+    val intro_rule : formula -> theorem -> theorem
+    val elim_rule : theorem -> theorem -> theorem
+  end;;
+
+module Kernel : KERNEL = struct
+  type formula =
+    | Var of int
+    | Imp of formula * formula
+
+  type sequent =
+    (formula list) * formula
+
+  type theorem =
+    Proof of sequent
+
+  type goal =
+    Goal of sequent
+
+  exception RuleException of string
+
+  let assume (a : formula) : theorem =
+    Proof ([a], a);;
+
+  let intro_rule (a : formula) (Proof (gamma, b) : theorem) : theorem =
+    Proof (gamma -- a, Imp (a,b));;
+
+  let elim_rule (Proof (gamma, imp) : theorem)
+                (Proof (delta, a) : theorem)
+              : theorem =
+    match imp with
+      | Var _ -> raise (RuleException "cannot use [elim_rule] with (Var _) in first argument")
+      | Imp (a', b) ->
+        if imp = Imp(a, b) then
+          Proof (gamma @ delta, b)
+        else
+          raise (RuleException "antecedent of first argument must be the second argument");;
+end;;
+
+include Kernel;;
+
 
 
 (*
@@ -74,32 +114,9 @@ let rec print_formula : formula -> string = function
 let print_theorem (Proof (l, a) : theorem) : string =
     (String.concat ", " (List.map print_formula l)) ^ " |- " ^ (print_formula a);;
 
-let print_goal (Proposition (l, a) : goal) : string =
+let print_goal (Goal (l, a) : goal) : string =
     (String.concat ", " (List.map print_formula l)) ^ " ?- " ^ (print_formula a);;
 
-
-(*
-  Inference rules for minimal propositional logic
-  ===============================================
-*)
-exception RuleException of string;;
-
-let assume (a : formula) : theorem =
-  Proof ([a], a);;
-
-let intro_rule (a : formula) (Proof (gamma, b) : theorem) : theorem =
-  Proof (gamma -- a, Imp (a,b));;
-
-let elim_rule (Proof (gamma, imp) : theorem)
-              (Proof (delta, a) : theorem)
-            : theorem =
-  match imp with
-    | Var _ -> raise (RuleException "cannot use [elim_rule] with (Var _) in first argument")
-    | Imp (a', b) ->
-      if imp = Imp(a, b) then
-        Proof (gamma @ delta, b)
-      else
-        raise (RuleException "antecedent of first argument must be the second argument");;
 
 
 (*
@@ -109,6 +126,10 @@ let elim_rule (Proof (gamma, imp) : theorem)
   Breaking up goals into smaller pieces,
    and providing justification functions.
 *)
+type justification = (theorem list) -> theorem;;
+type goalstate = (goal list) * justification;;
+type tactic = goal -> goalstate;;
+
 let by (tac : tactic) ((goals, j1) : goalstate) : goalstate =
   match goals with
     | [] -> (goals, j1) (* do nothing *)
@@ -123,30 +144,32 @@ let by (tac : tactic) ((goals, j1) : goalstate) : goalstate =
 exception TacticException of string;;
 exception JustificationException;;
 
-let assumption (Proposition (gamma, a) : goal) : goalstate =
+(* An easy way to check against the conclusion of a theorem *)
+let (|-) (th : theorem) (f : formula) =
+  match th with
+  | Proof (_, f') when f = f' -> true
+  | _ -> false;;
+
+let assumption (Goal (gamma, a) : goal) : goalstate =
   if List.mem a gamma then
     ([], fun _ -> assume a)
   else raise (TacticException "assumption tactic not applicable");;
 
-let intro_tac (Proposition (gamma, imp) : goal) : goalstate =
+let intro_tac (Goal (gamma, imp) : goal) : goalstate =
   match imp with
     | Var _ -> raise (TacticException "intro tactic only works on implicative goals")
     | Imp (a,b) ->
-      [Proposition (a::gamma, b)],
+      [Goal (a::gamma, b)],
       function
-        | [Proof (delta, b')] ->
-          if b = b' then
-            intro_rule a (Proof (delta, b))
-          else raise JustificationException
+        | [th] when th |- b ->
+          intro_rule a th
         | _ -> raise JustificationException;;
 
-let elim_tac (a : formula) (Proposition (gamma, b) : goal) : goalstate =
-    [Proposition (gamma, Imp (a,b)); Proposition (gamma, a)],
+let elim_tac (a : formula) (Goal (gamma, b) : goal) : goalstate =
+    [Goal (gamma, Imp (a,b)); Goal (gamma, a)],
     function
-      | [Proof (delta, imp); Proof (delta', a')] ->
-        if imp = Imp (a,b) && a = a' then
-          elim_rule (Proof (delta, imp)) (Proof (delta', a'))
-        else raise JustificationException
+      | [th1; th2] when th1 |- Imp (a,b) && th2 |- a ->
+        elim_rule th1 th2
       | _ -> raise JustificationException;;
 
 
@@ -170,11 +193,13 @@ let current_goal () =
   | _ -> raise QED;;
 
 let p () =
-  print_goal (current_goal ());;
+  let s = print_goal (current_goal ()) in
+    print_string (s ^ "\n");
+    s;;
 
 let g (a : formula) =
   history := [
-    [Proposition ([], a)],
+    [Goal ([], a)],
     function
     | [th] -> th
     | _ -> raise JustificationException
