@@ -1,7 +1,12 @@
+(*
+  Helper functions
+  ================
+*)
 
-(* Helper functions *)
+(* Infix notation to remove an element (and it's duplicates) from a list *)
 let (--) (l : 'a list) (e : 'a) = List.filter (fun e' -> e <> e') l;;
 
+(* Split a list in two, given a split point *)
 let split l n =
   let rec aux i acc = function
     | [] -> (List.rev acc, [])
@@ -10,7 +15,28 @@ let split l n =
     aux n [] l;;
 
 
-(* Core data types *)
+(*
+  Core data types
+  ===============
+  
+  Basically, we use sequents in two ways:
+   either as a goal (something yet to be proven),
+   of as a theorem (a proved statement).
+  Ideally, the first one can be constructed
+   ad hoc, anytime, anywhere, while the second
+   is protected by a module (as is, e.g.,
+   HOL Light).
+   
+  Tactics break a single goal into smaller
+   pieces, conceptually going "up the
+   natural deduction tree", but must also
+   provide justification for their breaking up,
+   in terms of a function that reconnects
+   theorems of those pieces into a theorem of
+   the original goal. This justification function
+   may of course only use the three inference rules
+   of minimal propositional logic.
+*)
 type formula =
   | Var of int
   | Imp of formula * formula;;
@@ -18,20 +44,29 @@ type formula =
 type sequent =
   (formula list) * formula;;
 
+(* This one ideally protected by a module.. *)
 type theorem =
   Proof of sequent;;
 
+(* ..while this one is for "free" *)
 type goal =
   Proposition of sequent;;
 
 type justification = (theorem list) -> theorem;;
-
 type goalstate = (goal list) * justification;;
-
 type tactic = goal -> goalstate;;
 
 
-(* Pretty printing *)
+(*
+  Pretty printing
+  ===============
+  
+  A TODO is to allow input like in HOL Light,
+   e.g. writing
+      `A => B => A`
+   for
+      Imp (Var 0, Imp (Var 1, Var 0))
+*)
 let rec print_formula : formula -> string = function
   | Var n -> Char.escaped (Char.chr (n + 65))
   | Imp (a,b) -> "(" ^ (print_formula a) ^ " => " ^ (print_formula b) ^ ")";;
@@ -43,7 +78,10 @@ let print_goal (Proposition (l, a) : goal) : string =
     (String.concat ", " (List.map print_formula l)) ^ " ?- " ^ (print_formula a);;
 
 
-(* Logical rules *)
+(*
+  Inference rules for minimal propositional logic
+  ===============================================
+*)
 exception RuleException of string;;
 
 let assume (a : formula) : theorem =
@@ -64,7 +102,13 @@ let elim_rule (Proof (gamma, imp) : theorem)
         raise (RuleException "antecedent of first argument must be the second argument");;
 
 
-(* Tactics *)
+(*
+  Tactics
+  =======
+  
+  Breaking up goals into smaller pieces,
+   and providing justification functions.
+*)
 let by (tac : tactic) ((goals, j1) : goalstate) : goalstate =
   match goals with
     | [] -> (goals, j1) (* do nothing *)
@@ -106,7 +150,10 @@ let elim_tac (a : formula) (Proposition (gamma, b) : goal) : goalstate =
       | _ -> raise JustificationException;;
 
 
-(* Stateful proof environment *)
+(*
+  Stateful proof environment
+  ==========================
+*)
 exception QED;;
 
 let history : goalstate list ref =
@@ -153,7 +200,10 @@ let top_theorem () : theorem =
   let (_, j) = current_goalstate() in j [];;
 
 
-(* Example *)
+(*
+  An example
+  ==========
+*)
 g (Imp (Var 0, Imp (Var 1, Var 0)));;
 e intro_tac;;
 e intro_tac;;
