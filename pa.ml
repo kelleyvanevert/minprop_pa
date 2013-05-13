@@ -1,3 +1,5 @@
+
+
 (*
   Helper functions
   ================
@@ -152,15 +154,17 @@ let elim_tac (a : formula) (Goal (gamma, b) : goal) : goalstate =
         elim_rule th1 th2
       | _ -> raise JustificationException;;
 
-let trytac (tac : tactic) : tactic =
-  fun g ->
-    try
-      tac g
-    with (TacticException _) ->
-      [g],
-      function
-        | [th] -> th
-        | _ -> raise JustificationException;;
+
+(* Some tacticals *)
+
+let try_tac (tac : tactic) (g : goal) : goalstate =
+  try
+    tac g
+  with (TacticException _) ->
+    [g],
+    function
+      | [th] -> th
+      | _ -> raise JustificationException;;
 
 let rec iterate_until_exception (f : 'a -> 'a) (x: 'a) : 'a =
   try iterate_until_exception f (f x)
@@ -173,8 +177,8 @@ let repeat_tac (tac : tactic) (g : goal) : goalstate =
 
 
 (*
-  Pretty printing
-  ===============
+  Parsing and pretty printing
+  ===========================
 *)
 let rec print_formula : formula -> string = function
   | Var n -> Char.escaped (Char.chr (n + 65))
@@ -186,18 +190,58 @@ let print_theorem (Provable (l, a) : theorem) : string =
 let print_goal (Goal (l, a) : goal) : string =
     (String.concat ", " (List.map print_formula l)) ^ " ?- " ^ (print_formula a);;
 
-(*
-  A TODO is to allow input like in HOL Light,
-   e.g. writing
-      `A => B => A`
-   for
-      Imp (Var 0, Imp (Var 1, Var 0))
-  For now we'll to with
-      !!0 => (!!1 => !!0)
-   (note the wrong associativity!)
-*)
-let (=>) (a : formula) (b : formula) : formula = Imp (a, b);;
-let (!!) (n : int) : formula = Var n;;
+let (@@) (s : string) (n : int) =
+  String.sub s n ((String.length s) - n);;
+
+type token =
+  | LParen
+  | RParen
+  | Arrow
+  | TVar of int;;
+
+let rec lex (s : string) : token list =
+  if s = "" then
+    []
+  else if s.[0] = ' ' then
+    lex (s @@ 1)
+  else if s.[0] = '(' then
+    LParen :: lex (s @@ 1)
+  else if s.[0] = ')' then
+    RParen :: lex (s @@ 1)
+  else if String.length s >= 2 && String.sub s 0 2 = "=>" then
+    Arrow :: lex (s @@ 2)
+  else
+    TVar ((Char.code s.[0]) - 65) :: lex (s @@ 1);;
+
+exception ShuntingException of string * token list * token list * token list;;
+
+let rec shunting output stack tokens =
+  match tokens with
+  | [] -> (match stack with
+    | LParen :: _ -> raise (ShuntingException ("left paren over", output, stack, tokens))
+    | RParen :: _ -> raise (ShuntingException ("right paren over", output, stack, tokens))
+    | y :: ys -> shunting (y :: output) ys []
+    | [] -> output)
+  | x :: rest -> match x with
+    | TVar n -> shunting (TVar n :: output) stack rest
+    | Arrow -> shunting output (Arrow :: stack) rest
+    | LParen -> shunting output (LParen :: stack) rest
+    | RParen -> match stack with
+      | [] -> raise (ShuntingException ("too much right parens", output, stack, tokens))
+      | LParen :: stack' -> shunting output stack' rest
+      | t :: stack' -> shunting (t :: output) stack' tokens;;
+
+exception ParseException of formula list * token list;;
+
+let rec parse stack postfix_tokens =
+  match (stack, postfix_tokens) with
+  | stack, TVar n :: rest -> parse (Var n :: stack) rest
+  | a :: b :: stack', Arrow :: rest -> parse (Imp (b, a) :: stack') rest
+  | [f], [] -> f
+  | _, _ -> raise (ParseException (stack, postfix_tokens));;
+
+let formula (s : string) : formula =
+  parse [] (List.rev (shunting [] [] (lex s)));;
 
 
 
@@ -205,8 +249,6 @@ let (!!) (n : int) : formula = Var n;;
   Stateful proof environment
   ==========================
 *)
-exception QED;;
-
 let history : goalstate list ref =
   ref [];;
 
@@ -215,15 +257,18 @@ let current_goalstate () =
   | goalstate :: t -> goalstate
   | _ -> raise Not_found;;
 
-let current_goal () =
-  match current_goalstate () with
-  | (g :: _, _) -> g
-  | _ -> raise QED;;
+let print_goalstate ((goals, _) : goalstate) =
+  if List.length goals = 0 then
+    print_string "\n  No subgoals\n\n"
+  else
+    print_string "\n  Subgoals:\n";
+    Array.iteri (fun n -> fun g ->
+      print_string ("    " ^ (string_of_int n) ^ ". " ^ print_goal g ^ "\n")
+    ) (Array.of_list goals);
+    print_string "\n";;
 
 let p () =
-  let s = print_goal (current_goal ()) in
-    print_string ("\n" ^ s ^ "\n\n");
-    ();;
+  print_goalstate (current_goalstate ());;
 
 let g (a : formula) =
   history := [
@@ -243,8 +288,8 @@ let e (tac : tactic) =
 
 let b () =
   match !history with
-  | goalstate :: t ->
-    history := t;
+  | now :: prev :: t ->
+    history := prev :: t;
     p()
   | _ ->
     p();;
@@ -257,16 +302,23 @@ let top_theorem () : theorem =
   Examples
   ========
 *)
-g (!!0 => (!!1 => !!0));;
-e intro_tac;;
-e intro_tac;;
+g (formula "A => B => A");;
+e (repeat_tac intro_tac);;
 e assumption;;
 print_theorem (top_theorem ());;
 
-g (!!0 => ((!!0 => !!1) => !!1));;
-e intro_tac;;
-e intro_tac;;
-e (elim_tac !!0);;
+g (formula "A => (A => B) => B");;
+e (repeat_tac intro_tac);;
+e (elim_tac (formula "A"));;
+e assumption;;
+e assumption;;
+print_theorem (top_theorem ());;
+
+g (formula "A => (B => C) => (A => B) => C");;
+e (repeat_tac intro_tac);;
+e (elim_tac (formula "B"));;
+e assumption;;
+e (elim_tac (formula "A"));;
 e assumption;;
 e assumption;;
 print_theorem (top_theorem ());;
