@@ -98,28 +98,6 @@ include Kernel;;
 
 
 (*
-  Pretty printing
-  ===============
-  
-  A TODO is to allow input like in HOL Light,
-   e.g. writing
-      `A => B => A`
-   for
-      Imp (Var 0, Imp (Var 1, Var 0))
-*)
-let rec print_formula : formula -> string = function
-  | Var n -> Char.escaped (Char.chr (n + 65))
-  | Imp (a,b) -> "(" ^ (print_formula a) ^ " => " ^ (print_formula b) ^ ")";;
-
-let print_theorem (Provable (l, a) : theorem) : string =
-    (String.concat ", " (List.map print_formula l)) ^ " |- " ^ (print_formula a);;
-
-let print_goal (Goal (l, a) : goal) : string =
-    (String.concat ", " (List.map print_formula l)) ^ " ?- " ^ (print_formula a);;
-
-
-
-(*
   Tactics
   =======
   
@@ -130,19 +108,21 @@ type justification = (theorem list) -> theorem;;
 type goalstate = (goal list) * justification;;
 type tactic = goal -> goalstate;;
 
+exception TacticException of string;;
+exception JustificationException;;
+
 let by (tac : tactic) ((goals, j1) : goalstate) : goalstate =
   match goals with
     | [] -> (goals, j1) (* do nothing *)
-    | g :: gs2 ->
+    | g :: gs1 ->
       let (gs2, j2) = tac g in (
-          gs2 @ gs2,
-          fun thms -> (* TODO check lengths *)
-            let (thms2, thms1) = split thms (List.length gs2) in
-              j1 ((j2 thms2) :: thms1)
+          gs2 @ gs1,
+          fun thms ->
+            if List.length thms = List.length gs2 + List.length gs1 then
+              let (thms2, thms1) = split thms (List.length gs2) in
+                j1 ((j2 thms2) :: thms1)
+            else raise JustificationException
         );;
-
-exception TacticException of string;;
-exception JustificationException;;
 
 (* An easy way to check against the conclusion of a theorem *)
 let (|-) (th : theorem) (f : formula) =
@@ -172,6 +152,54 @@ let elim_tac (a : formula) (Goal (gamma, b) : goal) : goalstate =
         elim_rule th1 th2
       | _ -> raise JustificationException;;
 
+let trytac (tac : tactic) : tactic =
+  fun g ->
+    try
+      tac g
+    with (TacticException _) ->
+      [g],
+      function
+        | [th] -> th
+        | _ -> raise JustificationException;;
+
+let rec iterate_until_exception (f : 'a -> 'a) (x: 'a) : 'a =
+  try iterate_until_exception f (f x)
+  with _ -> x;;
+
+
+let repeat_tac (tac : tactic) (g : goal) : goalstate =
+  iterate_until_exception (fun (s : goalstate) -> by tac s) (tac g);;
+
+
+
+(*
+  Pretty printing
+  ===============
+*)
+let rec print_formula : formula -> string = function
+  | Var n -> Char.escaped (Char.chr (n + 65))
+  | Imp (a,b) -> "(" ^ (print_formula a) ^ " => " ^ (print_formula b) ^ ")";;
+
+let print_theorem (Provable (l, a) : theorem) : string =
+    (String.concat ", " (List.map print_formula l)) ^ " |- " ^ (print_formula a);;
+
+let print_goal (Goal (l, a) : goal) : string =
+    (String.concat ", " (List.map print_formula l)) ^ " ?- " ^ (print_formula a);;
+
+(*
+  A TODO is to allow input like in HOL Light,
+   e.g. writing
+      `A => B => A`
+   for
+      Imp (Var 0, Imp (Var 1, Var 0))
+  For now we'll to with
+      !!0 => (!!1 => !!0)
+   (note the wrong associativity!)
+*)
+let (=>) (a : formula) (b : formula) : formula = Imp (a, b);;
+let (!!) (n : int) : formula = Var n;;
+
+
 
 (*
   Stateful proof environment
@@ -194,8 +222,8 @@ let current_goal () =
 
 let p () =
   let s = print_goal (current_goal ()) in
-    print_string (s ^ "\n");
-    s;;
+    print_string ("\n" ^ s ^ "\n\n");
+    ();;
 
 let g (a : formula) =
   history := [
@@ -226,11 +254,19 @@ let top_theorem () : theorem =
 
 
 (*
-  An example
-  ==========
+  Examples
+  ========
 *)
-g (Imp (Var 0, Imp (Var 1, Var 0)));;
+g (!!0 => (!!1 => !!0));;
 e intro_tac;;
 e intro_tac;;
+e assumption;;
+print_theorem (top_theorem ());;
+
+g (!!0 => ((!!0 => !!1) => !!1));;
+e intro_tac;;
+e intro_tac;;
+e (elim_tac !!0);;
+e assumption;;
 e assumption;;
 print_theorem (top_theorem ());;
