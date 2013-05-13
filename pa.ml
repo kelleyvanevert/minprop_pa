@@ -1,5 +1,4 @@
 
-
 (*
   Helper functions
   ================
@@ -179,6 +178,7 @@ let repeat_tac (tac : tactic) (g : goal) : goalstate =
 (*
   Parsing and pretty printing
   ===========================
+  (Really quite dirty, but I couldn't get my head around camlp5 just yet..)
 *)
 let rec print_formula : formula -> string = function
   | Var n -> Char.escaped (Char.chr (n + 65))
