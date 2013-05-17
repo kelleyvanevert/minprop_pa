@@ -15,6 +15,16 @@ let split l n =
                      else aux (i - 1) (h :: acc) t in
     aux n [] l;;
 
+(* Compose functions *)
+let ($) f g x = f (g x);;
+
+(* Find the first element of a list that satisfies a certain criterion *)
+let rec find p l =
+  match l with
+  | [] -> None
+  | x :: xs -> if p x then Some x else find p xs;;
+
+
 
 (*
   Kernel
@@ -98,6 +108,29 @@ include Kernel;;
 
 
 
+
+
+(*
+  exception SentException;;
+
+  (* A sentinel to separate assumptions and conclusion from each other
+      in the formula encoding of a goal. *)
+  let sent : formula = Imp (Var 24, Var 24);;
+
+  (* A proof of "|- sent". *)
+  let sent_truth : theorem =
+    intro_rule (Var 24) (assume (Var 24));;
+
+  (* Encodes a goal into a formula, using the sentinal to separate the parts *)
+  let encode_goal (Goal (assumptions, conclusion) : goal) : formula =
+    List.fold_right (fun a f -> Imp (a, Imp (sent, f))) assumptions conclusion;;
+*)
+
+
+
+
+
+
 (*
   Tactics
   =======
@@ -105,25 +138,43 @@ include Kernel;;
   Breaking up goals into smaller pieces,
    and providing justification functions.
 *)
-type justification = (theorem list) -> theorem;;
-type goalstate = (goal list) * justification;;
-type tactic = goal -> goalstate;;
+type justification = theorem list -> theorem;;
+type goalstate = goal list * theorem;;
+type tactic = goal -> (goal list * justification);;
 
 exception TacticException of string;;
 exception JustificationException;;
 
-let by (tac : tactic) ((goals, j1) : goalstate) : goalstate =
-  match goals with
-    | [] -> (goals, j1) (* do nothing *)
+(* Encodes a goal "a1, .., aN ?- b" into
+    a formula "a1 => .. => aN => b" *)
+let encode_goal (Goal (gamma, b) : goal) : formula =
+  List.fold_right (fun a f -> Imp (a, f)) gamma b;;
+
+(*
+  Apply a tactic to the first subgoal in the given goalstate,
+   resulting in a new goalstate.
+
+  If
+    s = g :: gs1, "phi_g, gamma_gs1 |- psi"
+  and
+    tac g = gs2, _
+  then
+    by tac s = gs2 @ gs1, "gamma_gs2, gamma_gs1 |- psi"
+*)
+let by (tac : tactic) (goals, th : goalstate) : goalstate =
+  match th with
+  | Provable (current_goal_assumption :: _, _) ->
+    begin match goals with
     | g :: gs1 ->
-      let (gs2, j2) = tac g in (
-          gs2 @ gs1,
-          fun thms ->
-            if List.length thms = List.length gs2 + List.length gs1 then
-              let (thms2, thms1) = split thms (List.length gs2) in
-                j1 ((j2 thms2) :: thms1)
-            else raise JustificationException
-        );;
+      let (gs2, j) = tac g in
+        gs2 @ gs1,
+        elim_rule
+          (intro_rule current_goal_assumption th)
+          (j (List.map (assume $ encode_goal) gs2))
+    | [] -> raise (TacticException "There must be an open goal")
+    end
+  | _ -> raise (TacticException "There must be an open goal")
+;;
 
 (* An easy way to check against the conclusion of a theorem *)
 let (|-) (th : theorem) (f : formula) =
@@ -131,22 +182,22 @@ let (|-) (th : theorem) (f : formula) =
   | Provable (_, f') when f = f' -> true
   | _ -> false;;
 
-let assumption (Goal (gamma, a) : goal) : goalstate =
+let assumption (Goal (gamma, a) : goal) =
   if List.mem a gamma then
-    ([], fun _ -> assume a)
+    [], fun _ -> assume a
   else raise (TacticException "assumption tactic not applicable");;
 
-let intro_tac (Goal (gamma, imp) : goal) : goalstate =
+let intro_tac (Goal (gamma, imp) : goal) =
   match imp with
     | Var _ -> raise (TacticException "intro tactic only works on implicative goals")
-    | Imp (a,b) ->
+    | Imp (a, b) ->
       [Goal (a::gamma, b)],
-      function
-        | [th] when th |- b ->
-          intro_rule a th
+      fun thms ->
+        match find (fun th -> th |- b) thms with
+        | Some th -> intro_rule a th
         | _ -> raise JustificationException;;
 
-let elim_tac (a : formula) (Goal (gamma, b) : goal) : goalstate =
+let elim_tac (a : formula) (Goal (gamma, b) : goal) =
     [Goal (gamma, Imp (a,b)); Goal (gamma, a)],
     function
       | [th1; th2] when th1 |- Imp (a,b) && th2 |- a ->
@@ -154,25 +205,26 @@ let elim_tac (a : formula) (Goal (gamma, b) : goal) : goalstate =
       | _ -> raise JustificationException;;
 
 
-(* Some tacticals *)
+(*
+  (* Some tacticals *)
 
-let try_tac (tac : tactic) (g : goal) : goalstate =
-  try
-    tac g
-  with (TacticException _) ->
-    [g],
-    function
-      | [th] -> th
-      | _ -> raise JustificationException;;
+  let try_tac (tac : tactic) (g : goal) : goalstate =
+    try
+      tac g
+    with (TacticException _) ->
+      [g],
+      function
+        | [th] -> th
+        | _ -> raise JustificationException;;
 
-let rec iterate_until_exception (f : 'a -> 'a) (x: 'a) : 'a =
-  try iterate_until_exception f (f x)
-  with _ -> x;;
+  let rec iterate_until_exception (f : 'a -> 'a) (x: 'a) : 'a =
+    try iterate_until_exception f (f x)
+    with _ -> x;;
 
 
-let repeat_tac (tac : tactic) (g : goal) : goalstate =
-  iterate_until_exception (fun (s : goalstate) -> by tac s) (tac g);;
-
+  let repeat_tac (tac : tactic) (g : goal) : goalstate =
+    iterate_until_exception (fun (s : goalstate) -> by tac s) (tac g);;
+*)
 
 
 (*
@@ -257,7 +309,7 @@ let current_goalstate () =
   | goalstate :: t -> goalstate
   | _ -> raise Not_found;;
 
-let print_goalstate ((goals, _) : goalstate) =
+let print_goalstate (goals, th : goalstate) =
   if List.length goals = 0 then
     print_string "\n  No subgoals\n\n"
   else
@@ -265,7 +317,8 @@ let print_goalstate ((goals, _) : goalstate) =
     Array.iteri (fun n -> fun g ->
       print_string ("    " ^ (string_of_int n) ^ ". " ^ print_goal g ^ "\n")
     ) (Array.of_list goals);
-    print_string "\n";;
+    print_string "\n  State:\n";
+    print_string ("    " ^ (print_theorem th) ^ "\n\n");;
 
 let p () =
   print_goalstate (current_goalstate ());;
@@ -273,9 +326,7 @@ let p () =
 let g (a : formula) =
   history := [
     [Goal ([], a)],
-    function
-    | [th] -> th
-    | _ -> raise JustificationException
+    assume a
   ];
   p();;
 
@@ -295,13 +346,13 @@ let b () =
     p();;
 
 let top_theorem () : theorem =
-  let (_, j) = current_goalstate() in j [];;
+  let (_, th) = current_goalstate() in th;;
 
 
 (*
   Examples
   ========
-*)
+
 g (formula "A => B => A");;
 e (repeat_tac intro_tac);;
 e assumption;;
@@ -322,3 +373,4 @@ e (elim_tac (formula "A"));;
 e assumption;;
 e assumption;;
 print_theorem (top_theorem ());;
+*)
