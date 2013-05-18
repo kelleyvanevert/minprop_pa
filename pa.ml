@@ -4,7 +4,8 @@
   ================
 *)
 
-(* Infix notation to remove an element (and it's duplicates) from a list *)
+(* Infix notation to remove an element (and it's
+    duplicates) from a list *)
 let (--) (l : 'a list) (e : 'a) = List.filter (fun e' -> e <> e') l;;
 
 (* Split a list in two, given a split point *)
@@ -18,11 +19,13 @@ let split l n =
 (* Compose functions *)
 let ($) f g x = f (g x);;
 
-(* Find the first element of a list that satisfies a certain criterion *)
+(* Find the first element of a list that satisfies
+    a certain criterion and return it *)
 let rec find p l =
   match l with
   | [] -> None
   | x :: xs -> if p x then Some x else find p xs;;
+
 
 
 
@@ -33,20 +36,11 @@ let rec find p l =
   Basically, we use sequents in two ways:
    either as a goal (something yet to be proven),
    or as a theorem (a proved statement).
+
   We protect the creation of theorems
    by marking the type as private in the Kernel
    module. Only the three inference rules can be
    used to construct theorems.
-   
-  Tactics break a single goal into smaller
-   pieces, conceptually going "up the
-   natural deduction tree", but must also
-   provide justification for their breaking up,
-   in terms of a function that reconnects
-   theorems of those pieces into a theorem of
-   the original goal. This justification function
-   may of course only use the three inference rules
-   of minimal propositional logic.
 *)
 module type KERNEL =
   sig
@@ -110,121 +104,6 @@ include Kernel;;
 
 
 
-(*
-  exception SentException;;
-
-  (* A sentinel to separate assumptions and conclusion from each other
-      in the formula encoding of a goal. *)
-  let sent : formula = Imp (Var 24, Var 24);;
-
-  (* A proof of "|- sent". *)
-  let sent_truth : theorem =
-    intro_rule (Var 24) (assume (Var 24));;
-
-  (* Encodes a goal into a formula, using the sentinal to separate the parts *)
-  let encode_goal (Goal (assumptions, conclusion) : goal) : formula =
-    List.fold_right (fun a f -> Imp (a, Imp (sent, f))) assumptions conclusion;;
-*)
-
-
-
-
-
-
-(*
-  Tactics
-  =======
-  
-  Breaking up goals into smaller pieces,
-   and providing justification functions.
-*)
-type justification = theorem list -> theorem;;
-type goalstate = goal list * theorem;;
-type tactic = goal -> (goal list * justification);;
-
-exception TacticException of string;;
-exception JustificationException;;
-
-(* Encodes a goal "a1, .., aN ?- b" into
-    a formula "a1 => .. => aN => b" *)
-let encode_goal (Goal (gamma, b) : goal) : formula =
-  List.fold_right (fun a f -> Imp (a, f)) gamma b;;
-
-(*
-  Apply a tactic to the first subgoal in the given goalstate,
-   resulting in a new goalstate.
-
-  If
-    s = g :: gs1, "phi_g, gamma_gs1 |- psi"
-  and
-    tac g = gs2, _
-  then
-    by tac s = gs2 @ gs1, "gamma_gs2, gamma_gs1 |- psi"
-*)
-let by (tac : tactic) (goals, th : goalstate) : goalstate =
-  match th with
-  | Provable (current_goal_assumption :: _, _) ->
-    begin match goals with
-    | g :: gs1 ->
-      let (gs2, j) = tac g in
-        gs2 @ gs1,
-        elim_rule
-          (intro_rule current_goal_assumption th)
-          (j (List.map (assume $ encode_goal) gs2))
-    | [] -> raise (TacticException "There must be an open goal")
-    end
-  | _ -> raise (TacticException "There must be an open goal")
-;;
-
-(* An easy way to check against the conclusion of a theorem *)
-let (|-) (th : theorem) (f : formula) =
-  match th with
-  | Provable (_, f') when f = f' -> true
-  | _ -> false;;
-
-let assumption (Goal (gamma, a) : goal) =
-  if List.mem a gamma then
-    [], fun _ -> assume a
-  else raise (TacticException "assumption tactic not applicable");;
-
-let intro_tac (Goal (gamma, imp) : goal) =
-  match imp with
-    | Var _ -> raise (TacticException "intro tactic only works on implicative goals")
-    | Imp (a, b) ->
-      [Goal (a::gamma, b)],
-      fun thms ->
-        match find (fun th -> th |- b) thms with
-        | Some th -> intro_rule a th
-        | _ -> raise JustificationException;;
-
-let elim_tac (a : formula) (Goal (gamma, b) : goal) =
-    [Goal (gamma, Imp (a,b)); Goal (gamma, a)],
-    function
-      | [th1; th2] when th1 |- Imp (a,b) && th2 |- a ->
-        elim_rule th1 th2
-      | _ -> raise JustificationException;;
-
-
-(*
-  (* Some tacticals *)
-
-  let try_tac (tac : tactic) (g : goal) : goalstate =
-    try
-      tac g
-    with (TacticException _) ->
-      [g],
-      function
-        | [th] -> th
-        | _ -> raise JustificationException;;
-
-  let rec iterate_until_exception (f : 'a -> 'a) (x: 'a) : 'a =
-    try iterate_until_exception f (f x)
-    with _ -> x;;
-
-
-  let repeat_tac (tac : tactic) (g : goal) : goalstate =
-    iterate_until_exception (fun (s : goalstate) -> by tac s) (tac g);;
-*)
 
 
 (*
@@ -234,7 +113,7 @@ let elim_tac (a : formula) (Goal (gamma, b) : goal) =
 *)
 let rec print_formula : formula -> string = function
   | Var n -> Char.escaped (Char.chr (n + 65))
-  | Imp (a,b) -> "(" ^ (print_formula a) ^ " => " ^ (print_formula b) ^ ")";;
+  | Imp (f0, f1) -> "(" ^ (print_formula f0) ^ " => " ^ (print_formula f1) ^ ")";;
 
 let print_theorem (Provable (l, a) : theorem) : string =
     (String.concat ", " (List.map print_formula l)) ^ " |- " ^ (print_formula a);;
@@ -269,19 +148,25 @@ exception ShuntingException of string * token list * token list * token list;;
 
 let rec shunting output stack tokens =
   match tokens with
-  | [] -> (match stack with
+  | [] ->
+    begin match stack with
     | LParen :: _ -> raise (ShuntingException ("left paren over", output, stack, tokens))
     | RParen :: _ -> raise (ShuntingException ("right paren over", output, stack, tokens))
     | y :: ys -> shunting (y :: output) ys []
-    | [] -> output)
-  | x :: rest -> match x with
+    | [] -> output
+    end
+  | x :: rest ->
+    begin match x with
     | TVar n -> shunting (TVar n :: output) stack rest
     | Arrow -> shunting output (Arrow :: stack) rest
     | LParen -> shunting output (LParen :: stack) rest
-    | RParen -> match stack with
+    | RParen ->
+      begin match stack with
       | [] -> raise (ShuntingException ("too much right parens", output, stack, tokens))
       | LParen :: stack' -> shunting output stack' rest
-      | t :: stack' -> shunting (t :: output) stack' tokens;;
+      | t :: stack' -> shunting (t :: output) stack' tokens
+      end
+    end;;
 
 exception ParseException of formula list * token list;;
 
@@ -294,6 +179,137 @@ let rec parse stack postfix_tokens =
 
 let formula (s : string) : formula =
   parse [] (List.rev (shunting [] [] (lex s)));;
+
+
+
+
+
+
+
+(*
+  Tactics
+  =======
+  
+  Breaking up goals into smaller pieces,
+   and providing justification functions.
+*)
+type justification = theorem list -> theorem;;
+type goalstate = goal list * theorem;;
+type tactic = goal -> (goal list * justification);;
+
+exception TacticException of string;;
+exception JustificationException;;
+
+let collapse_formula_list (gamma : formula list) : formula =
+  match gamma with
+  | z :: xs -> List.fold_right (fun x y -> Imp (x, y)) xs z
+  | [] -> raise Not_found;;
+
+let goal_to_theorem (Goal (gamma, b)) : theorem =
+  List.fold_left
+    (fun th phi -> elim_rule th (assume phi))
+    (assume (collapse_formula_list (b :: gamma)))
+    gamma;;
+
+
+
+(* If f0  =  a0 => a1 => ... => aN => f1, then
+  diff f0 f1  =  [aN; ... a1; a0] *)
+exception StripException;;
+let diff f conclusion : formula list =
+  let rec diff' f conclusion diff =
+    begin match f with
+    | c' when c' = conclusion -> diff
+    | Imp (a, b) -> diff' b conclusion (a :: diff)
+    | _ -> raise StripException
+    end
+  in
+    diff' f conclusion [];;
+
+let conclusion th =
+  match th with
+  | Provable (_, c) -> c;;
+
+
+
+
+
+
+(*
+  Apply a tactic to the first subgoal in the given goalstate,
+   resulting in a new goalstate.
+
+  If
+    s = g :: gs1, "phi_g, gamma_gs1 |- psi"
+  and
+    tac g = gs2, _
+  then
+    by tac s = gs2 @ gs1, "gamma_gs2, gamma_gs1 |- psi"
+*)
+let by (tac : tactic) (goals, th : goalstate) : goalstate =
+  match goals, th with
+  | g :: gs1, Provable (phi_g :: _, _) ->
+    let (gs2, j) = tac g in
+    let th_a = intro_rule phi_g th in
+    let th_b = j (List.map goal_to_theorem gs2) in
+    let th_b' = List.fold_right intro_rule (List.rev (diff phi_g (conclusion th_b))) th_b in
+    gs2 @ gs1, elim_rule th_a th_b'
+  | _, _ -> raise (TacticException "There must be an open goal");;
+
+(* An easy way to check against the conclusion of a theorem *)
+let (|-) (th : theorem) (f : formula) =
+  match th with
+  | Provable (_, f') when f = f' -> true
+  | _ -> false;;
+
+let assumption (Goal (gamma, a) : goal) =
+  if List.mem a gamma then
+    [], fun _ -> assume a
+  else raise (TacticException "assumption tactic not applicable");;
+
+let intro_tac (Goal (gamma, imp) : goal) =
+  match imp with
+    | Var _ -> raise (TacticException "intro tactic only works on implicative goals")
+    | Imp (a, b) ->
+      [Goal (gamma @ [a], b)],
+      fun thms ->
+        match find (fun th -> th |- b) thms with
+        | Some th -> intro_rule a th
+        | _ -> raise JustificationException;;
+
+let elim_tac (a : formula) (Goal (gamma, b) : goal) =
+    [Goal (gamma, Imp (a,b)); Goal (gamma, a)],
+    fun thms ->
+      match find (fun th -> th |- Imp (a, b)) thms,
+            find (fun th -> th |- a) thms with
+      | Some th_imp, Some th_b -> elim_rule th_imp th_b
+      | _ -> raise JustificationException;;
+
+
+(* Some tacticals *)
+
+let try_tac (tac : tactic) (g : goal) : goal list * justification =
+  try
+    tac g
+  with (TacticException _) ->
+    [g], function [th] -> th | _ -> raise JustificationException;;
+
+let rec repeat_tac (tac : tactic) (g : goal) : goal list * justification =
+  try
+    match tac g with
+    | g' :: gs1, j1 ->
+      let gs2, j2 = repeat_tac tac g' in
+        gs2 @ gs1,
+        fun thms ->
+          if List.length thms = List.length gs2 + List.length gs1 then
+            let (thms2, thms1) = split thms (List.length gs2) in
+              j1 ((j2 thms2) :: thms1)
+          else raise JustificationException
+    | [], j1 -> [], j1
+  with _ ->
+    [g], function [th] -> th | _ -> raise JustificationException;;
+
+
 
 
 
@@ -352,7 +368,7 @@ let top_theorem () : theorem =
 (*
   Examples
   ========
-
+*)
 g (formula "A => B => A");;
 e (repeat_tac intro_tac);;
 e assumption;;
@@ -373,4 +389,3 @@ e (elim_tac (formula "A"));;
 e assumption;;
 e assumption;;
 print_theorem (top_theorem ());;
-*)
