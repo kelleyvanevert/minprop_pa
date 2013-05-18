@@ -16,7 +16,7 @@ let split l n =
                      else aux (i - 1) (h :: acc) t in
     aux n [] l;;
 
-(* Compose functions *)
+(* Compose two functions *)
 let ($) f g x = f (g x);;
 
 (* Find the first element of a list that satisfies
@@ -103,12 +103,10 @@ include Kernel;;
 
 
 
-
-
-
 (*
   Parsing and pretty printing
   ===========================
+
   (Really quite dirty, but I couldn't get my head around camlp5 just yet..)
 *)
 let rec print_formula : formula -> string = function
@@ -183,15 +181,29 @@ let formula (s : string) : formula =
 
 
 
-
-
-
 (*
-  Tactics
-  =======
+  Subgoal "package"
+  =================
   
-  Breaking up goals into smaller pieces,
-   and providing justification functions.
+  A tactic is a function which sends an openstanding goal to a set of
+   new, smaller, goals, and provides justification via a function that,
+   given a set of proofs of the new goals, returns a proof of the
+   original goal. This function must be insensitive to additional,
+   unnecessary proofs it is given.
+
+  The logical state of a proof session (a goalstate) consists of
+   the list of openstanding goals, and a theorem generally stating
+
+      "Gamma_goals |- conjecture"
+
+   ..in which "conjecture" is the proof aim, and "Gamma_goals" is an
+   obvious encoding of the openstanding goals. This way, when applying
+   a tactic to a goalstate, the justification function provided by
+   the tactic must be run immediately (to create a new status theorem),
+   ensuring it's validity. [Compare this to the situation where a
+   goalstate indicates it's logical state by "one big justification
+   function", in which case it's only run once, at the end of the
+   proof.]
 *)
 type justification = theorem list -> theorem;;
 type goalstate = goal list * theorem;;
@@ -211,8 +223,6 @@ let goal_to_theorem (Goal (gamma, b)) : theorem =
     (assume (collapse_formula_list (b :: gamma)))
     gamma;;
 
-
-
 (* If f0  =  a0 => a1 => ... => aN => f1, then
   diff f0 f1  =  [aN; ... a1; a0] *)
 exception StripException;;
@@ -229,11 +239,6 @@ let diff f conclusion : formula list =
 let conclusion th =
   match th with
   | Provable (_, c) -> c;;
-
-
-
-
-
 
 (*
   Apply a tactic to the first subgoal in the given goalstate,
@@ -285,7 +290,6 @@ let elim_tac (a : formula) (Goal (gamma, b) : goal) =
       | Some th_imp, Some th_b -> elim_rule th_imp th_b
       | _ -> raise JustificationException;;
 
-
 (* Some tacticals *)
 
 let try_tac (tac : tactic) (g : goal) : goal list * justification =
@@ -300,11 +304,7 @@ let rec repeat_tac (tac : tactic) (g : goal) : goal list * justification =
     | g' :: gs1, j1 ->
       let gs2, j2 = repeat_tac tac g' in
         gs2 @ gs1,
-        fun thms ->
-          if List.length thms = List.length gs2 + List.length gs1 then
-            let (thms2, thms1) = split thms (List.length gs2) in
-              j1 ((j2 thms2) :: thms1)
-          else raise JustificationException
+        fun thms -> j1 ((j2 thms) :: thms)
     | [], j1 -> [], j1
   with _ ->
     [g], function [th] -> th | _ -> raise JustificationException;;
@@ -312,10 +312,16 @@ let rec repeat_tac (tac : tactic) (g : goal) : goal list * justification =
 
 
 
-
 (*
   Stateful proof environment
   ==========================
+
+  g (f : formula)   Start a new proof
+  b ()              Go back a step
+  e (t : tactic)    Apply a tactic
+  p ()              Print current goal state
+  top_theorem ()    Get the theorem, af the end
+                     of a proof session
 *)
 let history : goalstate list ref =
   ref [];;
@@ -363,6 +369,8 @@ let b () =
 
 let top_theorem () : theorem =
   let (_, th) = current_goalstate() in th;;
+
+
 
 
 (*
