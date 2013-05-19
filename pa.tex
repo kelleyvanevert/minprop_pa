@@ -1,0 +1,265 @@
+% !TEX program = XeLaTeXmk
+% !TEX encoding = UTF-8
+
+\documentclass[a4paper,11pt]{article} % use larger type; default would be 10pt
+
+\usepackage{fontspec} % Font selection for XeLaTeX
+\defaultfontfeatures{Mapping=tex-text} % to support TeX conventions like ``---''
+\usepackage{xunicode} % Unicode support for LaTeX character names (accents, European chars, etc)
+\usepackage{xltxtra} % Extra customizations for XeLaTeX
+\usepackage{setspace}
+\setstretch{1.1}
+
+%\usepackage{mathpazo} % ??
+
+
+\setmainfont{Cardo}
+\setmonofont{Inconsolata}
+%\setsansfont{Deja Vu Sans}
+%\setmonofont{Deja Vu Mono}
+
+% other LaTeX packages.....
+\usepackage[a4paper,margin=2.5cm]{geometry} % See geometry.pdf to learn the layout options. There are lots.
+%\geometry{a4paper} % or letterpaper (US) or a5paper or....
+\usepackage[parfill]{parskip} % Activate to begin paragraphs with an empty line rather than an indent
+
+\usepackage{graphicx} % support the \includegraphics command and options
+
+\usepackage{minted}
+\usemintedstyle{friendly}
+
+\title{A small LCF-style proof assistant for minimal propositional logic, in OCaml}
+\author{Kelley van Evert, s4046854, IC}
+%\date{} % Activate to display a given date or no date (if empty),
+         % otherwise the current date is printed 
+
+\usepackage{natbib}
+
+\usepackage{amsmath,amsfonts,amssymb,amsthm}
+\usepackage{epsfig,epstopdf,titling,url,array}
+\usepackage{mathtools}
+\usepackage{textcomp}
+
+\usepackage[shortlabels]{enumitem}
+
+\newcommand{\Nat}{\mathbb{N}}
+\DeclareMathOperator{\Flat}{\flat}
+\DeclareMathOperator{\DownArrow}{\downarrow}
+\newcommand{\Pw}[1]{\mathcal{P}(#1)}
+\newcommand{\cK}{\text{\bfseries\sffamily K}}
+\newcommand{\cI}{\text{\bfseries\sffamily I}}
+\newcommand{\cY}{\text{\bfseries\sffamily Y}}
+\newcommand{\VAR}{\text{Var}}
+
+\usepackage{bussproofs}
+\def\extraVskip{5pt}
+
+\newminted{ocaml}{mathescape,
+               numbersep=5pt,
+               gobble=2,
+               frame=lines,
+               framesep=8pt}
+
+\begin{document}
+
+\maketitle
+
+This document describes a small LCF-style proof assistant for minimal propositional logic, which I wrote for a course on proof assistants. It is written in OCaml (though without the use of the “O” in OCaml), and exemplifies the method of representing the logical state of a proof session as a theorem:
+
+\mint{ocaml}@  type goalstate = goal list * theorem@
+
+… as opposed to representing it as a justification function, which reconstructs a proof for the original goal from the proofs for the various smaller goals that it was decomposed to by means of tactics:
+
+\mint{ocaml}@  type goalstate = goal list * (theorem list -> theorem)@
+
+\section{Kernel}
+
+The kernel, as a module, provides the \texttt{formula}, \texttt{theorem} and \texttt{goal} types, and the three basic inference rules to construct theorems. The \texttt{theorem} type is private, so that theorems cannot be constructed outside the module, and therefore only by means of the three basic inference rules. Thus objects of type \texttt{theorem} can be regarded as proofs, although they don't carry along this proof (hence the type constructor is named \texttt{Provable}).
+
+\begin{ocamlcode}
+  module type KERNEL =
+    sig
+      type formula = Var of int | Imp of formula * formula
+      type sequent = (formula list) * formula
+      type theorem = private Provable of sequent
+      type goal = Goal of sequent
+
+      exception RuleException of string
+
+      val assume : formula -> theorem
+      val intro_rule : formula -> theorem -> theorem
+      val elim_rule : theorem -> theorem -> theorem
+    end;;
+\end{ocamlcode}
+
+
+\section{Tactics, goals and session state}
+
+A tactic is a function which breaks a goal into smaller pieces, but must also provide justification for this decomposition by providing a function that reconstructs a proof of the original goal from a set of proofs for the smaller goals.
+
+\begin{ocamlcode}
+  type justification = theorem list -> theorem
+  type tactic = goal -> (goal list * justification)
+\end{ocamlcode}
+
+Each logical inference rule has a corresponding tactic which applies the rule:
+
+\begin{ocamlcode}
+  val assumption : tactic
+  val intro_tac : tactic
+  val elim_tac : formula -> tactic
+\end{ocamlcode}
+
+And furthermore I provided two “tacticals”, which take a tactic as argument, and return a new tactic that modified the behaviour of the given tactic slightly (in obvious ways).
+
+\begin{ocamlcode}
+  val try_tac : tactic -> tactic
+  val repeat_tac : tactic -> tactic
+\end{ocamlcode}
+
+As the user uses the proof assistant, conceptually working up the natural deduction tree starting from the initial goal, the session state is stored as an object with type \texttt{goalstate}. The easy way to represent this session, and thus to define this type, is to have it be a tuple of the list of openstanding goals, and a justification function. A completed proof would have no openstanding goals, and the justification function, when applied to the empty list, would generate the desired theorem. Note that this definition of the \texttt{goalstate} type corresponds exactly to the return type of a \texttt{tactic}.
+
+A problem with this approach is that the justification functions of the various tactics used in a proof session are only used at the end of the session, when the proof has been completed. Therefore, it is hard to debug these functions, seen as they're only run once, and within a whole framework of others, at the same time. Mind that in a system like this, tactics are manageable things, that one can create “on the fly” as one sees fit; so that this really is a problem. One solution to this problem is for the system to simply “test” the function with various inputs at the moment it is supplied (this is what, for instance, the HOL Light system does).
+
+Another solution is to represent the session state differently. The idea is to represent the logical state of the session by a theorem, which basically states that “the initial goal is provable by the currently openstanding goals”, that is:
+\begin{equation*}
+\ulcorner \Gamma_0 \vdash^? \phi_0 \urcorner, \ulcorner \Gamma_1 \vdash^? \phi_1 \urcorner, … \vdash \psi
+\end{equation*}
+… in which $\psi$ is the initial goal, and each $\ulcorner \Gamma_i \vdash^? \phi_i \urcorner$ is some encoding of the $i$-th openstanding goal. Thus we have the type definition:
+
+\mint{ocaml}@  type goalstate = goal list * theorem@
+
+This approach requires some “logical trickery”, however, because of the fact that we cannot (mustn't) circumpass the kernel in creating our theorems.
+
+\subsection{Encoding goals}
+
+If $\texttt{g} = \Gamma \vdash^? \phi$, then $\psi_\texttt{g} = \Gamma \Rightarrow \phi$ is the formula encoding of this goal (a nested implication containing as premises the various formulas in the environment of the goal). If \texttt{gs} is a list of goals, then we write $\Gamma_\texttt{gs}$ for the list of encoded goals.
+
+We also associate a theorem to each goal $\texttt{g} = \Gamma \vdash^? \phi$, by the function \texttt{goal\_to\_theorem}:
+\begin{equation*}
+\texttt{goal\_to\_theorem}(\Gamma \vdash^? \phi) =
+  \AxiomC{}
+  \RightLabel{\texttt{g2t}}
+  \UnaryInfC{$\psi_\texttt{g}, \Gamma \vdash \phi$}
+  \bottomAlignProof
+  \DisplayProof
+\end{equation*}
+
+As an example, if $\texttt{g} = \Gamma \vdash^? \phi$ and $\Gamma = A,B,C$, then $\psi_\texttt{g} = \Gamma \Rightarrow \phi = A \Rightarrow B \Rightarrow C \Rightarrow \phi$, and the corresponding theorem $\texttt{goal\_to\_theorem}(\texttt{g}) = \psi_\texttt{g}, \Gamma \vdash \phi$ is obtained as follows:
+
+\begin{equation*}
+\AxiomC{}
+\UnaryInfC{$\psi_\texttt{g}, \Gamma \vdash \psi_\texttt{g}$}
+\AxiomC{}
+\UnaryInfC{$\psi_\texttt{g}, \Gamma \vdash A$}
+\BinaryInfC{$\psi_\texttt{g}, \Gamma \vdash B \Rightarrow C \Rightarrow \phi$}
+\AxiomC{}
+\UnaryInfC{$\psi_\texttt{g}, \Gamma \vdash B$}
+\BinaryInfC{$\psi_\texttt{g}, \Gamma \vdash C \Rightarrow \phi$}
+\AxiomC{}
+\UnaryInfC{$\psi_\texttt{g}, \Gamma \vdash C$}
+\BinaryInfC{$\psi_\texttt{g}, \Gamma \vdash \phi$}
+\DisplayProof
+\end{equation*}
+
+The code for this function is as follows:
+
+\begin{ocamlcode}
+  let goal_to_theorem (Goal (gamma, b)) : theorem =
+    List.fold_left
+      (fun th phi -> elim_rule th (assume phi))
+      (assume (collapse_formula_list (b :: gamma)))
+      gamma;;
+\end{ocamlcode}
+
+\subsection{Applying tactics}
+
+Now we are ready to define the function \texttt{by}, which takes a tactic and a goalstate, applies the tactic to the first openstanding goal in the goalstate, combines the results and returns a new goalstate.
+
+\mint{ocaml}@  by : tactic -> goalstate -> goalstate@
+
+Let \texttt{tac} be the given tactic, and \texttt{s = (g :: gs1, th)} the given goalstate, in which \texttt{g} = $\Gamma \vdash^? \phi$ and \texttt{th} is the theorem $\psi_\texttt{g}, \Gamma_\texttt{gs1} \vdash \psi$. We run the tactic on the first openstanding goal, \texttt{g}, and get \texttt{(gs2, j) = tac g}, and let's say that \texttt{gs2 = [h0, $\dots$ hN]}. The key part is how to construct the new state theorem, which should be $\Gamma_\texttt{gs2}, \Gamma_\texttt{gs1} \vdash \psi$, so that we can return the new goalstate \texttt{s' = (gs2 @ gs1, $\Gamma_\texttt{gs2}, \Gamma_\texttt{gs1} \vdash \psi$)}.
+
+Essentially, we want to do a simple modus ponens on the formula encodings of the various goals involved, in which $\Gamma_\texttt{gs2} \vdash \psi_\texttt{g}$ should follow from our justification function \texttt{j}:
+
+\begin{prooftree}
+  \AxiomC{}
+   \UnaryInfC{$\psi_\texttt{g}, \Gamma_\texttt{gs1} \vdash \psi$}
+    \UnaryInfC{$\Gamma_\texttt{gs1} \vdash \psi_\texttt{g} \Rightarrow \psi$}
+    \AxiomC{$\Gamma_\texttt{gs2} \vdash \psi_\texttt{g}$}
+     \BinaryInfC{$\Gamma_\texttt{gs2}, \Gamma_\texttt{gs1} \vdash \psi$}
+\end{prooftree}
+
+The tricky part lies in constructing this $\Gamma_\texttt{gs2} \vdash \psi_\texttt{g}$. Provided we have proofs for the goals of \texttt{gs1}, the justification function will allow us to construct:
+
+\begin{prooftree}
+  \AxiomC{$\Gamma_\texttt{h0} \vdash \phi_\texttt{h0}$}
+  \AxiomC{$\dots$}
+  \AxiomC{$\Gamma_\texttt{hN} \vdash \phi_\texttt{hN}$}
+  \RightLabel{\texttt{j}}
+  \TrinaryInfC{$\Gamma \vdash \phi$}
+\end{prooftree}
+
+We don't have these proofs just yet, but instead apply \texttt{j} to the theorem encodings of the goals (note that $\Gamma_\texttt{gs2} = \psi_\texttt{h0}, \dots \psi_\texttt{hN}$); after which we contract \texttt{g}'s environment again to get the desired result (note that $\psi_\texttt{g} = \Gamma \Rightarrow \phi$):
+
+\begin{prooftree}
+  \AxiomC{}
+  \RightLabel{\texttt{g2t}}
+  \UnaryInfC{$\psi_\texttt{h0}, \Gamma_\texttt{h0} \vdash \phi_\texttt{h0}$}
+  \AxiomC{$\dots$}
+  \AxiomC{}
+  \RightLabel{\texttt{g2t}}
+  \UnaryInfC{$\psi_\texttt{hN}, \Gamma_\texttt{hN} \vdash \phi_\texttt{hN}$}
+  \RightLabel{\texttt{j}}
+  \TrinaryInfC{$\Gamma_\texttt{gs2}, \Gamma \vdash \phi$}
+  \RightLabel{(contracting \texttt{g}'s environment)}
+  \UnaryInfC{$\Gamma_\texttt{gs2} \vdash \psi_\texttt{g}$}
+\end{prooftree}
+
+Plugging this last theorem into the simple modus ponens above, we get a full proof of the theorem $\Gamma_\texttt{gs2}, \Gamma_\texttt{gs1} \vdash \psi$, and we are done. The code for all this is:
+
+\begin{ocamlcode}
+  let by (tac : tactic) (goals, th : goalstate) : goalstate =
+    match goals, th with
+    | g :: gs1, Provable (psi_g :: _, _) ->
+      let (gs2, j) = tac g in
+      let j_th = j (List.map goal_to_theorem gs2) in
+      (* Contract g's environment: *)
+      let j_th' = List.fold_right intro_rule
+        (List.rev (diff psi_g (conclusion j_th))) j_th
+      in
+                (* Simple modus ponens on the various goals: *)
+        gs2 @ gs1, elim_rule (intro_rule psi_g th) j_th'
+    | _, _ -> raise (TacticException "There must be an open goal");;
+\end{ocamlcode}
+
+
+\section{Stateful proof environment}
+
+Finally, there is a simple stateful proof environment, in which we have various functions for manipulating the session state:
+
+\begin{ocamlcode}
+  val p : unit -> unit    (* Prints the current goalstate *)
+  val g : formula -> unit (* Starts a new proof session for "|- formula" *)
+  val e : tactic -> unit  (* Applies the given tactic to the current goal *)
+  let b : unit -> unit    (* Go back in history, one step *)
+
+  val top_theorem : unit -> theorem (* Returns the built theorem, after the
+                                       proof has been completed *)
+\end{ocamlcode}
+
+
+\section{Example proof session}
+
+\begin{ocamlcode}
+  g (formula "A => (B => C) => (A => B) => C");;
+  e (repeat_tac intro_tac);;
+  e (elim_tac (formula "B"));;
+  e assumption;;
+  e (elim_tac (formula "A"));;
+  e assumption;;
+  e assumption;;
+  print_theorem (top_theorem ());;
+\end{ocamlcode}
+
+\end{document}
