@@ -64,7 +64,7 @@
 
 \maketitle
 
-This document describes a small LCF-style proof assistant for minimal propositional logic, which I wrote for a course on proof assistants. It is written in OCaml (though without the use of the “O” in OCaml), and exemplifies the method of representing the logical state of a proof session as a theorem:
+This document describes some key points of a small LCF-style proof assistant for minimal propositional logic, which I wrote for a course on proof assistants. It is written in OCaml (though without the use of the “O” in OCaml), and exemplifies the method of representing the logical state of a proof session as a single theorem:
 
 \mint{ocaml}@  type goalstate = goal list * theorem@
 
@@ -110,7 +110,7 @@ Each logical inference rule has a corresponding tactic which applies the rule:
   val elim_tac : formula -> tactic
 \end{ocamlcode}
 
-And furthermore I provided two “tacticals”, which take a tactic as argument, and return a new tactic that modified the behaviour of the given tactic slightly (in obvious ways).
+And furthermore I provided two “tacticals”, which take a tactic as argument, and return a new tactic that extends the behaviour of the given tactic slightly (in obvious ways).
 
 \begin{ocamlcode}
   val try_tac : tactic -> tactic
@@ -119,17 +119,17 @@ And furthermore I provided two “tacticals”, which take a tactic as argument,
 
 As the user uses the proof assistant, conceptually working up the natural deduction tree starting from the initial goal, the session state is stored as an object with type \texttt{goalstate}. The easy way to represent this session, and thus to define this type, is to have it be a tuple of the list of openstanding goals, and a justification function. A completed proof would have no openstanding goals, and the justification function, when applied to the empty list, would generate the desired theorem. Note that this definition of the \texttt{goalstate} type corresponds exactly to the return type of a \texttt{tactic}.
 
-A problem with this approach is that the justification functions of the various tactics used in a proof session are only used at the end of the session, when the proof has been completed. Therefore, it is hard to debug these functions, seen as they're only run once, and within a whole framework of others, at the same time. Mind that in a system like this, tactics are manageable things, that one can create “on the fly” as one sees fit; so that this really is a problem. One solution to this problem is for the system to simply “test” the function with various inputs at the moment it is supplied (this is what, for instance, the HOL Light system does).
+A problem with this approach is that the justification functions of the various tactics used in a proof session are only used at the end of the session, when the proof has been completed. Therefore, it is hard to debug these functions, seen as they're only run once, and within a whole framework of others, all basically at the same time. Mind that in a system like this, tactics are manageable things, that one can create “on the fly” as one sees fit; so that this really is a problem. One solution to this problem is for the system to simply “test” the function with various inputs at the moment it is supplied (this is what, for instance, the HOL Light system does).
 
-Another solution is to represent the session state differently. The idea is to represent the logical state of the session by a theorem, which basically states that “the initial goal is provable by the currently openstanding goals”, that is:
+Another solution is to represent the session state differently. The idea is to represent the logical state of the session by a single theorem, which basically states that “the initial goal is provable by the currently openstanding goals”, that is:
 \begin{equation*}
 \ulcorner \Gamma_0 \vdash^? \phi_0 \urcorner, \ulcorner \Gamma_1 \vdash^? \phi_1 \urcorner, … \vdash \psi
 \end{equation*}
-… in which $\psi$ is the initial goal, and each $\ulcorner \Gamma_i \vdash^? \phi_i \urcorner$ is some encoding of the $i$-th openstanding goal. Thus we have the type definition:
+… in which $\psi$ is the initial goal, and each $\ulcorner \Gamma_i \vdash^? \phi_i \urcorner$ is some suitable encoding of the $i$-th openstanding goal. Thus we have the type definition:
 
 \mint{ocaml}@  type goalstate = goal list * theorem@
 
-This approach requires some “logical trickery”, however, because of the fact that we cannot (mustn't) circumpass the kernel in creating our theorems.
+This approach requires some “logical trickery”, however, because of the fact that we cannot (mustn't) circumpass the kernel in creating our session state theorems.
 
 \subsection{Encoding goals}
 
@@ -149,15 +149,15 @@ As an example, if $\texttt{g} = \Gamma \vdash^? \phi$ and $\Gamma = A,B,C$, then
 
 \begin{equation*}
 \AxiomC{}
-\UnaryInfC{$\psi_\texttt{g}, \Gamma \vdash \psi_\texttt{g}$}
+\UnaryInfC{$\psi_\texttt{g} \vdash \psi_\texttt{g}$}
 \AxiomC{}
-\UnaryInfC{$\psi_\texttt{g}, \Gamma \vdash A$}
-\BinaryInfC{$\psi_\texttt{g}, \Gamma \vdash B \Rightarrow C \Rightarrow \phi$}
+\UnaryInfC{$A \vdash A$}
+\BinaryInfC{$\psi_\texttt{g}, A \vdash B \Rightarrow C \Rightarrow \phi$}
 \AxiomC{}
-\UnaryInfC{$\psi_\texttt{g}, \Gamma \vdash B$}
-\BinaryInfC{$\psi_\texttt{g}, \Gamma \vdash C \Rightarrow \phi$}
+\UnaryInfC{$B \vdash B$}
+\BinaryInfC{$\psi_\texttt{g}, A, B \vdash C \Rightarrow \phi$}
 \AxiomC{}
-\UnaryInfC{$\psi_\texttt{g}, \Gamma \vdash C$}
+\UnaryInfC{$C \vdash C$}
 \BinaryInfC{$\psi_\texttt{g}, \Gamma \vdash \phi$}
 \DisplayProof
 \end{equation*}
@@ -216,7 +216,7 @@ We don't have these proofs just yet, but instead apply \texttt{j} to the theorem
   \UnaryInfC{$\Gamma_\texttt{gs2} \vdash \psi_\texttt{g}$}
 \end{prooftree}
 
-Plugging this last theorem into the simple modus ponens above, we get a full proof of the theorem $\Gamma_\texttt{gs2}, \Gamma_\texttt{gs1} \vdash \psi$, and we are done. The code for all this is:
+Plugging this last theorem into the simple modus ponens above, we get a full proof of the theorem $\Gamma_\texttt{gs2}, \Gamma_\texttt{gs1} \vdash \psi$, and we are done. The code for all this is (approximately):
 
 \begin{ocamlcode}
   let by (tac : tactic) (goals, th : goalstate) : goalstate =
@@ -249,17 +249,61 @@ Finally, there is a simple stateful proof environment, in which we have various 
 \end{ocamlcode}
 
 
-\section{Example proof session}
+\section{An example proof session}
 
-\begin{ocamlcode}
-  g (formula "A => (B => C) => (A => B) => C");;
-  e (repeat_tac intro_tac);;
-  e (elim_tac (formula "B"));;
-  e assumption;;
-  e (elim_tac (formula "A"));;
-  e assumption;;
-  e assumption;;
-  print_theorem (top_theorem ());;
-\end{ocamlcode}
+After each step, I list the current session state. (I abbreviate the implicational arrows $(\Rightarrow)$ by simple juxtaposition to save space.)
+
+\mint{ocaml}@  # use "pa.ml";;@
+\mint{ocaml}@  # g (formula "A => (B => C) => (A => B) => C");;@
+\begin{equation*}
+\big[
+  \vdash^? A(BC)(AB)C
+\big],\quad
+  A(BC)(AB)C \vdash A(BC)(AB)C
+\end{equation*}
+\mint{ocaml}@  # e (repeat_tac intro_tac);;@
+\begin{equation*}
+\big[
+  A, BC, AB\vdash^? C
+\big],\quad
+  A(BC)(AB)C \vdash A(BC)(AB)C
+\end{equation*}
+\mint{ocaml}@  # e (elim_tac (formula "B"));;@
+\begin{equation*}
+\big[
+  A, BC, AB\vdash^? BC;\;
+  A, BC, AB\vdash^? B
+\big],\quad
+  A(BC)(AB)(BC), A(BC)(AB)B \vdash A(BC)(AB)C
+\end{equation*}
+\mint{ocaml}@  # e assumption;;@
+\begin{equation*}
+\big[
+  A, BC, AB\vdash^? B
+\big],\quad
+  A(BC)(AB)B \vdash A(BC)(AB)C
+\end{equation*}
+\mint{ocaml}@  # e (elim_tac (formula "A"));;@
+\begin{equation*}
+\big[
+  A, BC, AB\vdash^? AB;\;
+  A, BC, AB\vdash^? A
+\big],\quad
+  A(BC)(AB)(AB), A(BC)(AB)A \vdash A(BC)(AB)C
+\end{equation*}
+\mint{ocaml}@  # e assumption;;@
+\begin{equation*}
+\big[
+  A, BC, AB\vdash^? A
+\big],\quad
+  A(BC)(AB)A \vdash A(BC)(AB)C
+\end{equation*}
+\mint{ocaml}@  # e assumption;;@
+\begin{equation*}
+\big[\;
+\big],\quad
+  \vdash A(BC)(AB)C
+\end{equation*}
+\mint{ocaml}@  # print_theorem (top_theorem ());;@
 
 \end{document}
