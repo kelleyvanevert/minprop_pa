@@ -1,1 +1,1 @@
-Please read [pa.pdf?raw=true](pa.pdf) ;)
+Please read [pa.pdf](pa.pdf?raw=true) ;)
